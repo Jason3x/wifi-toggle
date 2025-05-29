@@ -15,7 +15,7 @@ set -euo pipefail
 CURR_TTY="/dev/tty1"
 
 # Preferred Wi-Fi modules, tried in this order.
-PREFERRED_WIFI_MODULES=("r8188eu" "8188eu")
+PREFERRED_WIFI_MODULES=("8188eu" "r8188eu")
 
 # --- Initial Setup ---
 printf "\033c" > "$CURR_TTY"
