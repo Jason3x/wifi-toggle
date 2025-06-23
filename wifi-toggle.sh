@@ -14,6 +14,10 @@ set -euo pipefail
 # --- Global Variables ---
 CURR_TTY="/dev/tty1"
 
+# Path for USB Wi-Fi module removal
+WIFI_USB_PATH="/sys/bus/usb/devices/1-1"
+
+
 # Preferred Wi-Fi modules, tried in this order.
 PREFERRED_WIFI_MODULES=("8188eu" "r8188eu")
 
@@ -95,20 +99,23 @@ detect_wifi_modules() {
 }
 
 check_rfkill() {
-    if ! command -v rfkill &> /dev/null; then
-        dialog --infobox "Installing rfkill..." 5 50 > "$CURR_TTY"
-        sleep 1
+    local REQUIRED_PACKAGES=("rfkill" "wpasupplicant" "network-manager")
+    local MISSING_PACKAGES=()
 
-        if apt-get update >/dev/null 2>&1 && apt-get install -y rfkill >/dev/null 2>&1; then
-            dialog --infobox "rfkill installed successfully." 5 50 > "$CURR_TTY"
-            sleep 1
-        else
-            dialog --msgbox "Error: Could not install rfkill. Please check your internet connection and try again." 8 70 > "$CURR_TTY"
-            ExitMenu
+    for pkg in "${REQUIRED_PACKAGES[@]}"; do
+        if ! dpkg -s "$pkg" &>/dev/null; then
+            MISSING_PACKAGES+=("$pkg")
         fi
+    done
 
-        if ! command -v rfkill &> /dev/null; then
-            dialog --msgbox "Error: rfkill could not be installed. The script cannot continue." 8 70 > "$CURR_TTY"
+    if [[ ${#MISSING_PACKAGES[@]} -gt 0 ]]; then
+        dialog --infobox "Installing missing packages: ${MISSING_PACKAGES[*]}..." 5 60 > "$CURR_TTY"
+        sleep 1
+        apt-get update -y >/dev/null 2>&1
+        if apt-get install -y "${MISSING_PACKAGES[@]}" >/dev/null 2>&1; then
+            dialog --infobox "Installation successful: ${MISSING_PACKAGES[*]}." 5 60 > "$CURR_TTY"
+        else
+            dialog --msgbox "Error: Could not install required packages (${MISSING_PACKAGES[*]}). Check your internet connection and try again." 8 70 > "$CURR_TTY"
             ExitMenu
         fi
     fi
@@ -168,30 +175,35 @@ get_wifi_status() {
 disable_wifi() {
     dialog --infobox "Disabling Wi-Fi..." 3 30 > "$CURR_TTY"
     rfkill block wifi
+    if command -v nmcli &>/dev/null; then
+        nmcli radio wifi off
+    fi
     systemctl stop wpa_supplicant 2>/dev/null || true
     sleep 0.5
-
+    
     local modules_to_process_for_disable=($(detect_wifi_modules) "${PREFERRED_WIFI_MODULES[@]}")
     local unique_modules_to_disable=($(echo "${modules_to_process_for_disable[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
 
     if [[ ${#unique_modules_to_disable[@]} -gt 0 ]]; then
         for mod in "${unique_modules_to_disable[@]}"; do
             if [[ -z "$mod" ]]; then continue; fi
-            modprobe -r "$mod" 2>/dev/null || true
+            modprobe -r -q "$mod" 2>/dev/null || true
             if ! grep -qxF "blacklist $mod" /etc/modprobe.d/blacklist.conf 2>/dev/null ; then
                  echo "blacklist $mod" | tee -a /etc/modprobe.d/blacklist.conf > /dev/null
             fi
         done
     fi
-    dialog --msgbox "Wi-Fi disabled." 5 30 > "$CURR_TTY"
+    dialog --msgbox "Wi-Fi disabled." 5 20 > "$CURR_TTY"
 }
 
-enable_wifi() {
-    dialog --infobox "Enabling Wi-Fi..." 3 30 > "$CURR_TTY"
-
+enable_wifi_core() {
     local module_loaded_successfully=false
     local module_actually_loaded=""
+
     rfkill unblock wifi
+    if command -v nmcli &>/dev/null; then
+        nmcli radio wifi on
+    fi
 
     for mod_to_unblacklist in "${PREFERRED_WIFI_MODULES[@]}"; do
         sed -i "/^blacklist\s\+$mod_to_unblacklist\b/d" /etc/modprobe.d/blacklist.conf 2>/dev/null || true
@@ -201,52 +213,63 @@ enable_wifi() {
         if modprobe "$preferred_mod" 2>/dev/null; then
             module_loaded_successfully=true
             module_actually_loaded="$preferred_mod"
-            # Blacklist other preferred modules if this one loaded successfully
             for other_mod in "${PREFERRED_WIFI_MODULES[@]}"; do
                 if [[ "$other_mod" != "$module_actually_loaded" ]]; then
-                    if ! grep -qxF "blacklist $other_mod" /etc/modprobe.d/blacklist.conf 2>/dev/null ; then
-                         echo "blacklist $other_mod" | tee -a /etc/modprobe.d/blacklist.conf > /dev/null
-                    fi
+                    echo "blacklist $other_mod" >> /etc/modprobe.d/blacklist.conf
                 fi
             done
             break
-        else # If modprobe failed, ensure it's blacklisted to prevent auto-load issues
-            if ! grep -qxF "blacklist $preferred_mod" /etc/modprobe.d/blacklist.conf 2>/dev/null ; then
-                 echo "blacklist $preferred_mod" | tee -a /etc/modprobe.d/blacklist.conf > /dev/null
-            fi
         fi
     done
 
     if $module_loaded_successfully; then
-        if ! systemctl restart wpa_supplicant >/dev/null 2>&1; then
-            systemctl start wpa_supplicant >/dev/null 2>&1 || true
-        fi
-
-        sleep 2 # Give time for interface to come up and connect
-
+        systemctl restart wpa_supplicant >/dev/null 2>&1 || systemctl start wpa_supplicant >/dev/null 2>&1
+        sleep 0.5
         local iface_check
         iface_check=$(ip link show | awk '/wlan[0-9]+:/ {gsub(":", ""); print $2; exit}' || true)
-
-        if [[ -n "$iface_check" ]] && ip link show "$iface_check" | grep -q "state UP"; then
-            dialog --msgbox "Wi-Fi enabled. Connection established." 5 50 > "$CURR_TTY"
-        else
-            dialog --msgbox "Wi-Fi enabled. Module $module_actually_loaded loaded." 5 50 > "$CURR_TTY"
-            # Attempt to restart wpa_supplicant again if not connected
-            if ! systemctl restart wpa_supplicant >/dev/null 2>&1; then
-                systemctl start wpa_supplicant >/dev/null 2>&1 || true
-            fi
-    
-            # If interface exists but not UP, try bringing it down (might be a reset attempt)
-            if [[ -n "$iface_check" ]]; then
-                ip link set "$iface_check" down 2>/dev/null || true
-            fi
+        if [[ -n "$iface_check" ]]; then
+            ip link set "$iface_check" down 2>/dev/null || true
+            sleep 0.5
+            ip link set "$iface_check" up 2>/dev/null || true
         fi
     else
-        systemctl stop wpa_supplicant >/dev/null 2>&1 || true # Ensure wpa_supplicant is stopped if no module loaded
-        dialog --msgbox "Failed to enable Wi-Fi. No compatible module could be loaded." 6 50 > "$CURR_TTY"
+        systemctl stop wpa_supplicant >/dev/null 2>&1 || true
     fi
 }
 
+enable_wifi() {
+    dialog --infobox "Enabling Wi-Fi..." 3 30 > "$CURR_TTY"
+    enable_wifi_core
+
+    local iface_check
+    iface_check=$(ip link show | awk '/wlan[0-9]+:/ {gsub(":", ""); print $2; exit}' || true)
+    if [[ -n "$iface_check" ]] && ip link show "$iface_check" | grep -q "state UP"; then
+        dialog --msgbox "Wi-Fi enabled. Connection established." 5 50 > "$CURR_TTY"
+    else
+        dialog --msgbox "Wi-Fi enabled." 5 20 > "$CURR_TTY"
+    fi
+
+    enable_wifi_core
+    
+    dialog --infobox "Restarting EmulationStation...." 3 40 > $CURR_TTY
+  sleep 2 
+
+  sudo systemctl restart emulationstation & 
+
+  exit 0
+}
+
+    # Remove USB Wi-Fi module if path exists
+EjectWifi() {
+    if [[ -d "$WIFI_USB_PATH" ]]; then
+        dialog --infobox "Ejecting Wi-Fi module..." 3 30 > "$CURR_TTY"
+        echo 1 > "$WIFI_USB_PATH/remove" || true
+        sleep 2
+        dialog --msgbox "Wi-Fi module ejected." 5 30 > "$CURR_TTY"
+    else
+        dialog --msgbox "Wi-Fi module already ejected." 5 30 > "$CURR_TTY"
+    fi
+}
 
 RebootSystem() {
     dialog --infobox "Rebooting system..." 3 30 > "$CURR_TTY"
@@ -279,19 +302,21 @@ MainMenu() {
         CHOICE=$(dialog --output-fd 1 \
             --backtitle "Wi-Fi Management - R36S - By Jason" \
             --title "Wi-Fi Manager" \
-            --menu "Select an action:\n\nCurrent Wi-Fi Status: $WIFI_STATUS" 14 47 4 \
+            --menu "Select an action:\n\nCurrent Wi-Fi Status: $WIFI_STATUS" 15 47 5 \
             1 "Enable Wi-Fi" \
             2 "Disable Wi-Fi" \
-            3 "Reboot System" \
-            4 "Exit" \
+            3 "Eject Wi-Fi" \
+            4 "Reboot System" \
+            5 "Exit" \
         2>"$CURR_TTY")
 
-        case "$CHOICE" in
+        case $CHOICE in
             1) enable_wifi ;;
             2) disable_wifi ;;
-            3) RebootSystem ;;
-            4) ExitMenu ;;
-            *) ExitMenu ;; # Handles ESC or Cancel
+            3) EjectWifi ;;
+            4) RebootSystem ;;
+            5) ExitMenu ;;
+            *) ExitMenu ;;
         esac
     done
 }
