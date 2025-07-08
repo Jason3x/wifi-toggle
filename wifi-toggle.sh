@@ -24,6 +24,8 @@ PREFERRED_WIFI_MODULES=("8188eu" "r8188eu")
 THEMES_DIR="/roms/themes"
 PATCH_MARKER=".wifi_icon_patched"
 MAINXML_MARKER=".wifi_icon_patched_mainxml"
+HEADERXML_MARKER=".wifi_icon_patched_headerxml"
+
 
 WIFI_ICON_POS_X="0.16"
 WIFI_ICON_POS_Y="0.025"
@@ -51,7 +53,7 @@ pkill -9 -f gptokeyb || true
 pkill -9 -f osk.py || true
 
 printf "\033c" > "$CURR_TTY"
-printf "Starting Wifi Toggle.\nPlease wait..." > "$CURR_TTY"
+printf "Starting Wifi Toggle v2.0.\nPlease wait..." > "$CURR_TTY"
 sleep 1
 
 # --- Functions ---
@@ -207,6 +209,7 @@ disable_wifi() {
             fi
         done
     fi
+    update-initramfs -u
     dialog --msgbox "Wi-Fi disabled." 5 20 > "$CURR_TTY"
 }
 
@@ -235,6 +238,7 @@ enable_wifi_core() {
             break
         fi
     done
+    update-initramfs -u
 
     if $module_loaded_successfully; then
         systemctl restart wpa_supplicant >/dev/null 2>&1 || systemctl start wpa_supplicant >/dev/null 2>&1
@@ -389,6 +393,12 @@ themes_already_patched() {
     if [ -d "$NESBOX_PATH" ] && [ ! -f "$NESBOX_PATH/$MAINXML_MARKER" ]; then
         all_patched=false
     fi
+    
+    # Vérifie aussi sagabox
+    SAGABOX_PATH="$THEMES_DIR/es-theme-sagabox"
+    if [ -d "$SAGABOX_PATH" ] && [ ! -f "$SAGABOX_PATH/$HEADERXML_MARKER" ]; then
+        all_patched=false
+    fi
 
     $all_patched
 }
@@ -491,6 +501,50 @@ EOF
         touch "$NESBOX_PATH/$MAINXML_MARKER"
         progress_text+="Patched: es-theme-nes-box\n"
     fi
+    
+    # Patch spécifique pour es-theme-nes-box-sagabox/ (plusieurs fichiers XML)
+    SAGABOX_PATH="$THEMES_DIR/es-theme-sagabox"
+    if [ -d "$SAGABOX_PATH" ] && [ ! -f "$SAGABOX_PATH/$HEADERXML_MARKER" ]; then
+        for sagabox_xml in \
+            "$SAGABOX_PATH/header.xml" \
+            "$SAGABOX_PATH/rgb30.xml" \
+            "$SAGABOX_PATH/ogs.xml" \
+            "$SAGABOX_PATH/503.xml" \
+            "$SAGABOX_PATH/fullscreen.xml" \
+            "$SAGABOX_PATH/fullscreenv.xml"
+        do
+            [ -f "$sagabox_xml" ] || continue
+
+            cp "$sagabox_xml" "${sagabox_xml}.bak"
+
+            art_dir="$SAGABOX_PATH/_art"
+            mkdir -p "$art_dir"
+            icon_path_prefix=$(realpath --relative-to="$SAGABOX_PATH" "$art_dir")
+            cp "$art_dir/wifi_on.bak.svg" "$art_dir/wifi.svg"
+
+            xml_block="
+    <image name=\"wifi_icon\" extra=\"true\">
+        <path>./$icon_path_prefix/wifi.svg</path>
+        <pos>${WIFI_ICON_POS_X} ${WIFI_ICON_POS_Y}</pos>
+        <origin>0.5 0.5</origin>
+        <maxSize>${WIFI_ICON_SIZE} ${WIFI_ICON_SIZE}</maxSize>
+        <zIndex>150</zIndex>
+        <visible>true</visible>
+    </image>"
+
+            awk -v block="$xml_block" '
+                /<view name="system">/ || /<view name="detailed,video">/ || /<view name="basic">/ {
+                    print;
+                    print block;
+                    next;
+                }
+                { print }
+            ' "$sagabox_xml" > "${sagabox_xml}.tmp" && mv "${sagabox_xml}.tmp" "$sagabox_xml"
+        done
+
+        touch "$SAGABOX_PATH/$HEADERXML_MARKER"
+        progress_text+="Patched: es-theme-sagabox\n"
+    fi
 
     dialog --title "Done" --msgbox "Installation complete.\n\n$progress_text" 0 0 > "$CURR_TTY"
     create_updater_script
@@ -506,17 +560,49 @@ uninstall_icons() {
     for theme_path in "$THEMES_DIR"/*; do
         [ -d "$theme_path" ] || continue
 
+        # 1. Restaure theme.xml (standard)
         xml="$theme_path/theme.xml"
-        [ -f "$theme_path/$PATCH_MARKER" ] && [ -f "$xml.bak" ] && mv "$xml.bak" "$xml" && rm -f "$theme_path/$PATCH_MARKER"
+        if [ -f "$theme_path/$PATCH_MARKER" ] && [ -f "$xml.bak" ]; then
+            mv "$xml.bak" "$xml"
+            rm -f "$theme_path/$PATCH_MARKER"
+        fi
 
+        # 2. Restaure NES-box
         xml="$theme_path/main.xml"
-        [ -f "$theme_path/$MAINXML_MARKER" ] && [ -f "$xml.bak" ] && mv "$xml.bak" "$xml" && rm -f "$theme_path/$MAINXML_MARKER"
+        if [ -f "$theme_path/$MAINXML_MARKER" ] && [ -f "$xml.bak" ]; then
+            mv "$xml.bak" "$xml"
+            rm -f "$theme_path/$MAINXML_MARKER"
+        fi
 
-        rm -f "$theme_path"/{art,_art}/wifi_*.svg
+        # 3. Supprime les icônes SVG sauf pour Sagabox (géré plus loin)
+        if [[ "$(basename "$theme_path")" != "es-theme-sagabox" ]]; then
+            rm -f "$theme_path"/{art,_art}/wifi_*.svg
+        fi
 
         progress_text+="Cleaned: $(basename "$theme_path")\n"
     done
 
+    # 4. Restaure sagabox 
+    SAGABOX_PATH="$THEMES_DIR/es-theme-sagabox"
+    if [ -d "$SAGABOX_PATH" ] && [ -f "$SAGABOX_PATH/$HEADERXML_MARKER" ]; then
+        for sagabox_xml in \
+            "$SAGABOX_PATH/header.xml" \
+            "$SAGABOX_PATH/rgb30.xml" \
+            "$SAGABOX_PATH/ogs.xml" \
+            "$SAGABOX_PATH/503.xml" \
+            "$SAGABOX_PATH/fullscreen.xml" \
+            "$SAGABOX_PATH/fullscreenv.xml"
+        do
+            [ -f "$sagabox_xml.bak" ] && mv "$sagabox_xml.bak" "$sagabox_xml"
+        done
+
+        rm -f "$SAGABOX_PATH/$HEADERXML_MARKER"
+        rm -f "$SAGABOX_PATH"/{art,_art}/wifi_*.svg
+
+        progress_text+="Cleaned: es-theme-sagabox\n"
+    fi
+
+    # 5. Nettoyage système
     rm -f "$UPDATER_PATH"
     rm -f "$SERVICE_PATH"
     systemctl daemon-reload
