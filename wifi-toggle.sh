@@ -466,7 +466,7 @@ EOF
         progress_text+="Patched: $(basename "$theme_path")\n"
     done
 
-    # Patch spécifique pour es-theme-nes-box/main.xml
+    # Patch spécifique pour es-theme-nes-box
     NESBOX_PATH="$THEMES_DIR/es-theme-nes-box"
     if [ -d "$NESBOX_PATH" ] && [ ! -f "$NESBOX_PATH/$MAINXML_MARKER" ]; then
         nesbox_xml="$NESBOX_PATH/main.xml"
@@ -499,10 +499,9 @@ EOF
         ' "$nesbox_xml" > "${nesbox_xml}.tmp" && mv "${nesbox_xml}.tmp" "$nesbox_xml"
 
         touch "$NESBOX_PATH/$MAINXML_MARKER"
-        progress_text+="Patched: es-theme-nes-box\n"
     fi
     
-    # Patch spécifique pour es-theme-nes-box-sagabox/ (plusieurs fichiers XML)
+    # Patch spécifique pour es-theme-nes-box-sagabox
     SAGABOX_PATH="$THEMES_DIR/es-theme-sagabox"
     if [ -d "$SAGABOX_PATH" ] && [ ! -f "$SAGABOX_PATH/$HEADERXML_MARKER" ]; then
         for sagabox_xml in \
@@ -543,7 +542,6 @@ EOF
         done
 
         touch "$SAGABOX_PATH/$HEADERXML_MARKER"
-        progress_text+="Patched: es-theme-sagabox\n"
     fi
 
     dialog --title "Done" --msgbox "Installation complete.\n\n$progress_text" 0 0 > "$CURR_TTY"
@@ -598,8 +596,6 @@ uninstall_icons() {
 
         rm -f "$SAGABOX_PATH/$HEADERXML_MARKER"
         rm -f "$SAGABOX_PATH"/{art,_art}/wifi_*.svg
-
-        progress_text+="Cleaned: es-theme-sagabox\n"
     fi
 
     # 5. Nettoyage système
