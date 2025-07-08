@@ -1,5 +1,5 @@
 # wifi-toggle v2.0
-New script to turn off wifi, not just down like my old script for devices with built-in wifi
+New script to turn off wifi, not just down like my old script for devices with built-in wifi. 
 Add icons Wi-Fi for all themes  
 
 # Installation 
