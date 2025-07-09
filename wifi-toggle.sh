@@ -53,7 +53,7 @@ pkill -9 -f gptokeyb || true
 pkill -9 -f osk.py || true
 
 printf "\033c" > "$CURR_TTY"
-printf "Starting Wifi Toggle.\nPlease wait..." > "$CURR_TTY"
+printf "Starting Wifi Toggle v2.0.\nPlease wait..." > "$CURR_TTY"
 sleep 1
 
 # --- Functions ---
