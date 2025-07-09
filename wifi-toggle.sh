@@ -230,11 +230,7 @@ enable_wifi_core() {
         if modprobe "$preferred_mod" 2>/dev/null; then
             module_loaded_successfully=true
             module_actually_loaded="$preferred_mod"
-            for other_mod in "${PREFERRED_WIFI_MODULES[@]}"; do
-                if [[ "$other_mod" != "$module_actually_loaded" ]]; then
-                    echo "blacklist $other_mod" >> /etc/modprobe.d/blacklist.conf
-                fi
-            done
+            
             break
         fi
     done
