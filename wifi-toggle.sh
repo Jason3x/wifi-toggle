@@ -189,6 +189,8 @@ get_wifi_status() {
 
 
 disable_wifi() {
+systemctl stop wifi-icon-updater.service
+
     dialog --infobox "Disabling Wi-Fi..." 3 30 > "$CURR_TTY"
     rfkill block wifi
     if command -v nmcli &>/dev/null; then
@@ -211,6 +213,12 @@ disable_wifi() {
     fi
     update-initramfs -u
     dialog --msgbox "Wi-Fi disabled." 5 20 > "$CURR_TTY"
+    
+    dialog --title "Restarting" --infobox "\nEmulationStation will now restart to apply changes..." 4 55 > "$CURR_TTY"
+    sleep 1
+    
+systemctl start wifi-icon-updater.service
+
 }
 
 enable_wifi_core() {
@@ -230,12 +238,6 @@ enable_wifi_core() {
         if modprobe "$preferred_mod" 2>/dev/null; then
             module_loaded_successfully=true
             module_actually_loaded="$preferred_mod"
-            for other_mod in "${PREFERRED_WIFI_MODULES[@]}"; do
-                if [[ "$other_mod" != "$module_actually_loaded" ]]; then
-                    echo "blacklist $other_mod" >> /etc/modprobe.d/blacklist.conf
-                fi
-            done
-            break
         fi
     done
     update-initramfs -u
@@ -256,9 +258,10 @@ enable_wifi_core() {
 }
 
 enable_wifi() {
+systemctl stop wifi-icon-updater.service
     dialog --infobox "Enabling Wi-Fi..." 3 30 > "$CURR_TTY"
     enable_wifi_core
-
+    
     local iface_check
     iface_check=$(ip link show | awk '/wlan[0-9]+:/ {gsub(":", ""); print $2; exit}' || true)
     if [[ -n "$iface_check" ]] && ip link show "$iface_check" | grep -q "state UP"; then
@@ -266,15 +269,14 @@ enable_wifi() {
     else
         dialog --msgbox "Wi-Fi enabled." 5 20 > "$CURR_TTY"
     fi
-
+    
     enable_wifi_core
     
-    dialog --infobox "Restarting EmulationStation...." 3 40 > $CURR_TTY
-  sleep 2 
-
-  sudo systemctl restart emulationstation & 
-
-  exit 0
+    dialog --title "Restarting" --infobox "\nEmulationStation will now restart to apply changes..." 4 55 > "$CURR_TTY"
+    sleep 1
+    
+systemctl start wifi-icon-updater.service
+    
 }
 
     # Remove USB Wi-Fi module if path exists
