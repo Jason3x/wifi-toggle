@@ -408,32 +408,33 @@ themes_already_patched() {
 }
 
 install_icons() {
-    dialog --title "Installing Icons" --infobox "Installing Wi-Fi icons in themes.\nBackups will be created." 5 55 > "$CURR_TTY"
-    sleep 2
-    
-        if themes_already_patched; then
+    if themes_already_patched; then
         dialog --title "Already Patched" --msgbox "All themes are already patched.\nNo changes necessary." 6 50 > "$CURR_TTY"
         return
     fi
+    
+    dialog --title "Installing Icons" --infobox "Processing themes, please wait...\nThis may take a moment." 5 55 > "$CURR_TTY"
+    sleep 2
 
     local progress_text=""
+    
+    {
+        # Patch for all theme.xml themes
+        for theme_path in "$THEMES_DIR"/*; do
+            [ -d "$theme_path" ] || continue
+            theme_xml_file="$theme_path/theme.xml"
+            [ ! -f "$theme_xml_file" ] && continue
+            [ -f "$theme_path/$PATCH_MARKER" ] && continue
 
-    # Patch for all theme.xml themes
-    for theme_path in "$THEMES_DIR"/*; do
-        [ -d "$theme_path" ] || continue
-        theme_xml_file="$theme_path/theme.xml"
-        [ ! -f "$theme_xml_file" ] && continue
-        [ -f "$theme_path/$PATCH_MARKER" ] && continue
+            cp "$theme_xml_file" "${theme_xml_file}.bak"
 
-        cp "$theme_xml_file" "${theme_xml_file}.bak"
+            art_dir="$theme_path/_art"
+            [ -d "$art_dir" ] || art_dir="$theme_path/art"
+            mkdir -p "$art_dir"
+            icon_path_prefix=$(realpath --relative-to="$theme_path" "$art_dir")
 
-        art_dir="$theme_path/_art"
-        [ -d "$art_dir" ] || art_dir="$theme_path/art"
-        mkdir -p "$art_dir"
-        icon_path_prefix=$(realpath --relative-to="$theme_path" "$art_dir")
-
-        # Crée les fichiers SVG
-        cat > "$art_dir/wifi_on.bak.svg" << 'EOF'
+            # Create SVG files
+            cat > "$art_dir/wifi_on.bak.svg" << 'EOF'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" stroke="#28a745" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
   <path d="M4 16 C12 8, 24 8, 32 16" />
   <path d="M8 20 C14 14, 22 14, 28 20" />
@@ -441,8 +442,7 @@ install_icons() {
   <circle cx="18" cy="28" r="1.5" fill="#28a745" />
 </svg>
 EOF
-
-        cat > "$art_dir/wifi_off.bak.svg" << 'EOF'
+            cat > "$art_dir/wifi_off.bak.svg" << 'EOF'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" stroke="#dc3545" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
   <path d="M4 16 C12 8, 24 8, 32 16" />
   <path d="M8 20 C14 14, 22 14, 28 20" />
@@ -451,79 +451,6 @@ EOF
   <line x1="6" y1="6" x2="30" y2="30" stroke="#dc3545" />
 </svg>
 EOF
-
-        # Par défaut, active l'icône "on"
-        cp "$art_dir/wifi_on.bak.svg" "$art_dir/wifi.svg"
-
-        xml_block="
-    <image name=\"wifi_icon\" extra=\"true\">
-        <path>./$icon_path_prefix/wifi.svg</path>
-        <pos>${WIFI_ICON_POS_X} ${WIFI_ICON_POS_Y}</pos>
-        <origin>0.5 0.5</origin>
-        <maxSize>${WIFI_ICON_SIZE} ${WIFI_ICON_SIZE}</maxSize>
-        <zIndex>150</zIndex>
-        <visible>true</visible>
-    </image>"
-
-        awk -v block="$xml_block" '/<view / { print; print block; next } { print }' "$theme_xml_file" > "${theme_xml_file}.tmp" && mv "${theme_xml_file}.tmp" "$theme_xml_file"
-        touch "$theme_path/$PATCH_MARKER"
-        progress_text+="Patched: $(basename "$theme_path")\n"
-    done
-
-    # Patch spécifique pour es-theme-nes-box
-    NESBOX_PATH="$THEMES_DIR/es-theme-nes-box"
-    if [ -d "$NESBOX_PATH" ] && [ ! -f "$NESBOX_PATH/$MAINXML_MARKER" ]; then
-        nesbox_xml="$NESBOX_PATH/main.xml"
-        [ -f "$nesbox_xml" ] || return
-
-        cp "$nesbox_xml" "${nesbox_xml}.bak"
-        art_dir="$NESBOX_PATH/_art"
-        mkdir -p "$art_dir"
-        icon_path_prefix=$(realpath --relative-to="$NESBOX_PATH" "$art_dir")
-
-        cp "$art_dir/wifi_on.bak.svg" "$art_dir/wifi.svg"
-
-        xml_block="
-    <image name=\"wifi_icon\" extra=\"true\">
-        <path>./$icon_path_prefix/wifi.svg</path>
-        <pos>${WIFI_ICON_POS_X} ${WIFI_ICON_POS_Y}</pos>
-        <origin>0.5 0.5</origin>
-        <maxSize>${WIFI_ICON_SIZE} ${WIFI_ICON_SIZE}</maxSize>
-        <zIndex>150</zIndex>
-        <visible>true</visible>
-    </image>"
-
-        awk -v block="$xml_block" '
-            /<view name="system">/ || /<view name="detailed,video">/ || /<view name="basic">/ {
-                print;
-                print block;
-                next;
-            }
-            { print }
-        ' "$nesbox_xml" > "${nesbox_xml}.tmp" && mv "${nesbox_xml}.tmp" "$nesbox_xml"
-
-        touch "$NESBOX_PATH/$MAINXML_MARKER"
-        
-    fi
-    
-    # Patch spécifique pour es-theme-nes-box-sagabox
-    SAGABOX_PATH="$THEMES_DIR/es-theme-sagabox"
-    if [ -d "$SAGABOX_PATH" ] && [ ! -f "$SAGABOX_PATH/$HEADERXML_MARKER" ]; then
-        for sagabox_xml in \
-            "$SAGABOX_PATH/header.xml" \
-            "$SAGABOX_PATH/rgb30.xml" \
-            "$SAGABOX_PATH/ogs.xml" \
-            "$SAGABOX_PATH/503.xml" \
-            "$SAGABOX_PATH/fullscreen.xml" \
-            "$SAGABOX_PATH/fullscreenv.xml"
-        do
-            [ -f "$sagabox_xml" ] || continue
-
-            cp "$sagabox_xml" "${sagabox_xml}.bak"
-
-            art_dir="$SAGABOX_PATH/_art"
-            mkdir -p "$art_dir"
-            icon_path_prefix=$(realpath --relative-to="$SAGABOX_PATH" "$art_dir")
             cp "$art_dir/wifi_on.bak.svg" "$art_dir/wifi.svg"
 
             xml_block="
@@ -536,18 +463,92 @@ EOF
         <visible>true</visible>
     </image>"
 
-            awk -v block="$xml_block" '
-                /<view name="system">/ || /<view name="detailed,video">/ || /<view name="basic">/ {
-                    print;
-                    print block;
-                    next;
-                }
-                { print }
-            ' "$sagabox_xml" > "${sagabox_xml}.tmp" && mv "${sagabox_xml}.tmp" "$sagabox_xml"
+            awk -v block="$xml_block" '/<view / { print; print block; next } { print }' "$theme_xml_file" > "${theme_xml_file}.tmp" && mv "${theme_xml_file}.tmp" "$theme_xml_file"
+            touch "$theme_path/$PATCH_MARKER"
+            progress_text+="Patched: $(basename "$theme_path")\n"
         done
 
-        touch "$SAGABOX_PATH/$HEADERXML_MARKER"
-    fi
+        # Patch spécifique pour es-theme-nes-box
+        NESBOX_PATH="$THEMES_DIR/es-theme-nes-box"
+        if [ -d "$NESBOX_PATH" ] && [ ! -f "$NESBOX_PATH/$MAINXML_MARKER" ]; then
+            nesbox_xml="$NESBOX_PATH/main.xml"
+            if [ -f "$nesbox_xml" ]; then
+                cp "$nesbox_xml" "${nesbox_xml}.bak"
+                art_dir="$NESBOX_PATH/_art"
+                mkdir -p "$art_dir"
+
+                if [ ! -f "$art_dir/wifi_on.bak.svg" ]; then
+  
+                    cat > "$art_dir/wifi_on.bak.svg" << 'EOF'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" stroke="#28a745" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 16 C12 8, 24 8, 32 16" /><path d="M8 20 C14 14, 22 14, 28 20" /><path d="M12 24 C16 20, 20 20, 24 24" /><circle cx="18" cy="28" r="1.5" fill="#28a745" />
+</svg>
+EOF
+                    cat > "$art_dir/wifi_off.bak.svg" << 'EOF'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" stroke="#dc3545" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 16 C12 8, 24 8, 32 16" /><path d="M8 20 C14 14, 22 14, 28 20" /><path d="M12 24 C16 20, 20 20, 24 24" /><circle cx="18" cy="28" r="1.5" fill="#dc3545" /><line x1="6" y1="6" x2="30" y2="30" stroke="#dc3545" />
+</svg>
+EOF
+                fi
+                cp "$art_dir/wifi_on.bak.svg" "$art_dir/wifi.svg"
+                icon_path_prefix=$(realpath --relative-to="$NESBOX_PATH" "$art_dir")
+
+                xml_block="
+    <image name=\"wifi_icon\" extra=\"true\">
+        <path>./$icon_path_prefix/wifi.svg</path>
+        <pos>${WIFI_ICON_POS_X} ${WIFI_ICON_POS_Y}</pos>
+        <origin>0.5 0.5</origin>
+        <maxSize>${WIFI_ICON_SIZE} ${WIFI_ICON_SIZE}</maxSize>
+        <zIndex>150</zIndex>
+        <visible>true</visible>
+    </image>"
+
+                awk -v block="$xml_block" '/<view name="system">/ || /<view name="detailed,video">/ || /<view name="basic">/ { print; print block; next; } { print }' "$nesbox_xml" > "${nesbox_xml}.tmp" && mv "${nesbox_xml}.tmp" "$nesbox_xml"
+                touch "$NESBOX_PATH/$MAINXML_MARKER"
+        
+            fi
+        fi
+        
+        # Patch spécifique pour es-theme-sagabox
+        SAGABOX_PATH="$THEMES_DIR/es-theme-sagabox"
+        if [ -d "$SAGABOX_PATH" ] && [ ! -f "$SAGABOX_PATH/$HEADERXML_MARKER" ]; then
+            for sagabox_xml in "$SAGABOX_PATH/header.xml" "$SAGABOX_PATH/rgb30.xml" "$SAGABOX_PATH/ogs.xml" "$SAGABOX_PATH/503.xml" "$SAGABOX_PATH/fullscreen.xml" "$SAGABOX_PATH/fullscreenv.xml"; do
+                [ -f "$sagabox_xml" ] || continue
+                cp "$sagabox_xml" "${sagabox_xml}.bak"
+                art_dir="$SAGABOX_PATH/_art"
+                mkdir -p "$art_dir"
+                
+                if [ ! -f "$art_dir/wifi_on.bak.svg" ]; then
+                    cat > "$art_dir/wifi_on.bak.svg" << 'EOF'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" stroke="#28a745" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 16 C12 8, 24 8, 32 16" /><path d="M8 20 C14 14, 22 14, 28 20" /><path d="M12 24 C16 20, 20 20, 24 24" /><circle cx="18" cy="28" r="1.5" fill="#28a745" />
+</svg>
+EOF
+                    cat > "$art_dir/wifi_off.bak.svg" << 'EOF'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" stroke="#dc3545" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 16 C12 8, 24 8, 32 16" /><path d="M8 20 C14 14, 22 14, 28 20" /><path d="M12 24 C16 20, 20 20, 24 24" /><circle cx="18" cy="28" r="1.5" fill="#dc3545" /><line x1="6" y1="6" x2="30" y2="30" stroke="#dc3545" />
+</svg>
+EOF
+                fi
+                cp "$art_dir/wifi_on.bak.svg" "$art_dir/wifi.svg"
+                icon_path_prefix=$(realpath --relative-to="$SAGABOX_PATH" "$art_dir")
+
+                xml_block="
+    <image name=\"wifi_icon\" extra=\"true\">
+        <path>./$icon_path_prefix/wifi.svg</path>
+        <pos>${WIFI_ICON_POS_X} ${WIFI_ICON_POS_Y}</pos>
+        <origin>0.5 0.5</origin>
+        <maxSize>${WIFI_ICON_SIZE} ${WIFI_ICON_SIZE}</maxSize>
+        <zIndex>150</zIndex>
+        <visible>true</visible>
+    </image>"
+
+                awk -v block="$xml_block" '/<view name="system">/ || /<view name="detailed,video">/ || /<view name="basic">/ { print; print block; next; } { print }' "$sagabox_xml" > "${sagabox_xml}.tmp" && mv "${sagabox_xml}.tmp" "$sagabox_xml"
+            done
+            touch "$SAGABOX_PATH/$HEADERXML_MARKER"
+        
+        fi
+    } >/dev/null 2>&1
 
     dialog --title "Done" --msgbox "Installation complete.\n\n$progress_text" 0 0 > "$CURR_TTY"
     create_updater_script
