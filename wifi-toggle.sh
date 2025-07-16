@@ -189,7 +189,7 @@ get_wifi_status() {
 
 
 disable_wifi() {
-systemctl stop wifi-icon-updater.service
+systemctl stop wifi-icon-updater.service || true
 
     dialog --infobox "Disabling Wi-Fi..." 3 30 > "$CURR_TTY"
     rfkill block wifi
@@ -217,7 +217,8 @@ systemctl stop wifi-icon-updater.service
     dialog --title "Restarting" --infobox "\nEmulationStation will now restart to apply changes..." 4 55 > "$CURR_TTY"
     sleep 1
     
-systemctl start wifi-icon-updater.service
+systemctl start wifi-icon-updater.service || true
+    restart_es_and_exit
 
 }
 
@@ -258,7 +259,7 @@ enable_wifi_core() {
 }
 
 enable_wifi() {
-systemctl stop wifi-icon-updater.service
+systemctl stop wifi-icon-updater.service || true
     dialog --infobox "Enabling Wi-Fi..." 3 30 > "$CURR_TTY"
     enable_wifi_core
     
@@ -275,7 +276,8 @@ systemctl stop wifi-icon-updater.service
     dialog --title "Restarting" --infobox "\nEmulationStation will now restart to apply changes..." 4 55 > "$CURR_TTY"
     sleep 1
     
-systemctl start wifi-icon-updater.service
+systemctl start wifi-icon-updater.service || true
+    restart_es_and_exit
     
 }
 
