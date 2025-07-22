@@ -1,14 +1,11 @@
 #!/bin/bash
 
-#-----------------------#
-# WiFi Toggle for R36S  #
-#-----------------------#
+#----------------------------------------#
 
 # --- Root privilege check ---
 if [ "$(id -u)" -ne 0 ]; then
     exec sudo -- "$0" "$@"
 fi
-
 set -euo pipefail
 
 # --- Global Variables ---
@@ -16,7 +13,6 @@ CURR_TTY="/dev/tty1"
 
 # Path for USB Wi-Fi module removal
 WIFI_USB_PATH="/sys/bus/usb/devices/1-1"
-
 
 # Preferred Wi-Fi modules, tried in this order.
 PREFERRED_WIFI_MODULES=("8188eu" "r8188eu")
@@ -26,16 +22,15 @@ PATCH_MARKER=".wifi_icon_patched"
 MAINXML_MARKER=".wifi_icon_patched_mainxml"
 HEADERXML_MARKER=".wifi_icon_patched_headerxml"
 
-
 WIFI_ICON_POS_X="0.16"
 WIFI_ICON_POS_Y="0.025"
 WIFI_ICON_SIZE="0.07"
 
 UPDATER_PATH="/usr/local/bin/wifi_icon_state_updater.sh"
 SERVICE_PATH="/etc/systemd/system/wifi-icon-updater.service"
+SERVICE_FILE="/etc/systemd/system/wifi-wifi-usb-old-scheme.service"
 
-UPDATE_INTERVAL=4  # seconds
-
+UPDATE_INTERVAL=0.5  # seconds
 
 # --- Initial Setup ---
 printf "\033c" > "$CURR_TTY"
@@ -53,7 +48,7 @@ pkill -9 -f gptokeyb || true
 pkill -9 -f osk.py || true
 
 printf "\033c" > "$CURR_TTY"
-printf "Starting Wifi Toggle v2.0.\nPlease wait..." > "$CURR_TTY"
+printf "Starting Wifi Toggle v3.0\nPlease wait..." > "$CURR_TTY"
 sleep 1
 
 # --- Functions ---
@@ -125,13 +120,19 @@ check_rfkill() {
     done
 
     if [[ ${#MISSING_PACKAGES[@]} -gt 0 ]]; then
-        dialog --infobox "Installing missing packages: ${MISSING_PACKAGES[*]}..." 5 60 > "$CURR_TTY"
+    if ! ping -c 1 -W 3 8.8.8.8 &>/dev/null; then
+            dialog --title "Internet Required" --msgbox "\nAn active internet connection is required to install missing packages.\n\nPlease check your network and try again." 9 60 > "$CURR_TTY"
+            ExitMenu
+        fi
+        dialog --title "Check dependencies" --infobox "\nInstalling missing packages: ${MISSING_PACKAGES[*]}..." 5 60 > "$CURR_TTY"
+         
         sleep 1
         apt-get update -y >/dev/null 2>&1
         if apt-get install -y "${MISSING_PACKAGES[@]}" >/dev/null 2>&1; then
-            dialog --infobox "Installation successful: ${MISSING_PACKAGES[*]}." 5 60 > "$CURR_TTY"
+            dialog --title "Check dependencies" --infobox "\nInstallation successful: ${MISSING_PACKAGES[*]}." 6 60 > "$CURR_TTY"
+    sleep 2
         else
-            dialog --msgbox "Error: Could not install required packages (${MISSING_PACKAGES[*]}). Check your internet connection and try again." 8 70 > "$CURR_TTY"
+            dialog --title "Check dependencies" --msgbox "\nError: Could not install required packages (${MISSING_PACKAGES[*]}). Check your internet connection and try again." 9 70 > "$CURR_TTY"
             ExitMenu
         fi
     fi
@@ -160,7 +161,7 @@ get_wifi_status() {
                         if systemctl is-active --quiet wpa_supplicant; then
                             status="ON (Connecting...)"
                         else
-                            status="WARNING ($loaded_preferred_module: Interface DOWN, wpa_supplicant inactive)"
+                            status="No connection, please enable Wi-Fi"
                         fi
                     else
                         status="UNKNOWN (Interface DOWN, no preferred module loaded)"
@@ -175,9 +176,9 @@ get_wifi_status() {
                     fi
                  done
                  if [[ -n "$loaded_preferred_module" ]]; then
-                    status="OFF - OTG Port in use! Reboot to enable connection "
+                    status="OFF - Wi-Fi ejected please enable Wi-Fi "
                  else
-                    status="OFF (No interface / Modules not loaded)"
+                    status="OFF, please enable Wi-Fi"
                  fi
             fi
         fi
@@ -187,18 +188,20 @@ get_wifi_status() {
     echo "$status"
 }
 
+deduplicate_blacklist() {
+    local blacklist_file="/etc/modprobe.d/blacklist.conf"
+    [ -f "$blacklist_file" ] || return 0
+    awk '!x[$0]++' "$blacklist_file" > "${blacklist_file}.tmp" && mv "${blacklist_file}.tmp" "$blacklist_file"
+}
 
-disable_wifi() {
-systemctl stop wifi-icon-updater.service || true
 
-    dialog --infobox "Disabling Wi-Fi..." 3 30 > "$CURR_TTY"
-    rfkill block wifi
-    if command -v nmcli &>/dev/null; then
-        nmcli radio wifi off
+EjectWifi() {
+    if [[ -d "$WIFI_USB_PATH" ]]; then
+        echo 1 > "$WIFI_USB_PATH/remove" || true
     fi
-    systemctl stop wpa_supplicant 2>/dev/null || true
-    sleep 0.5
-    
+}
+
+EjectModule() {
     local modules_to_process_for_disable=($(detect_wifi_modules) "${PREFERRED_WIFI_MODULES[@]}")
     local unique_modules_to_disable=($(echo "${modules_to_process_for_disable[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
 
@@ -211,15 +214,105 @@ systemctl stop wifi-icon-updater.service || true
             fi
         done
     fi
-    update-initramfs -u
-    dialog --msgbox "Wi-Fi disabled." 5 20 > "$CURR_TTY"
+    deduplicate_blacklist
+}
+
+OTG() {
+if [[ -w /sys/module/usbcore/parameters/old_scheme_first ]]; then
+        echo "1" > /sys/module/usbcore/parameters/old_scheme_first || true
+    fi
+
+    # --- Crée un service systemd si inexistant pour rendre old_scheme_first persistant ---
+SERVICE_FILE="/etc/systemd/system/wifi-usb-old-scheme.service"
+
+if [[ ! -f "$SERVICE_FILE" ]]; then
+    cat <<'EOF' > "$SERVICE_FILE"
+[Unit]
+Description=Enable old USB enumeration scheme for OTG compatibility and restart dwc2
+After=multi-user.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '
+echo "1" > /sys/module/usbcore/parameters/old_scheme_first || true
+
+if grep -q "^dwc2 " /proc/modules; then
+    # Si le module est chargeable, on le redémarre proprement
+    modprobe -r dwc2 || true
+    sleep 1
+    modprobe dwc2 || true
+else
+    # Si le module est intégré au noyau, on fait unbind/bind
+    if [[ -e /sys/bus/platform/devices/ff300000.usb ]]; then
+        if [[ -e /sys/bus/platform/drivers/dwc2/unbind ]]; then
+            echo ff300000.usb > /sys/bus/platform/drivers/dwc2/unbind || true
+            sleep 1
+            echo ff300000.usb > /sys/bus/platform/drivers/dwc2/bind || true
+        fi
+    fi
+fi
+'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    chmod 644 "$SERVICE_FILE"
+    systemctl daemon-reload
+    systemctl enable wifi-usb-old-scheme.service >/dev/null 2>&1
+fi
     
-    dialog --title "Restarting" --infobox "\nEmulationStation will now restart to apply changes..." 4 55 > "$CURR_TTY"
+    # --- Gère le pilote USB dwc2 ---
+    if grep -q "^dwc2 " /proc/modules; then
+        # Si le module est chargeable, on le redémarre proprement
+        modprobe -r dwc2 || true
+        sleep 1
+        modprobe dwc2 || true
+    else
+        # Si le module est intégré au noyau, on fait unbind/bind
+        if [[ -e /sys/bus/platform/devices/ff300000.usb ]]; then
+            if [[ -e /sys/bus/platform/drivers/dwc2/unbind ]]; then
+                echo ff300000.usb > /sys/bus/platform/drivers/dwc2/unbind || true
+                sleep 1
+                echo ff300000.usb > /sys/bus/platform/drivers/dwc2/bind || true
+            else
+                dialog --title "Error" --msgbox "\nCould not access unbind/bind interface for dwc2 driver." 6 60 > "$CURR_TTY"
+            fi
+        else
+            dialog --title "Error" --msgbox "\nUSB controller ff300000.usb not found in /sys." 6 60 > "$CURR_TTY"
+        fi
+    fi
+
+    # --- Attend que tous les périphériques soient reconnus proprement ---
+    udevadm settle && sleep 2
+}    
+
+disable_wifi() {
+systemctl stop wifi-icon-updater.service || true
+
+    dialog --title "Wi-Fi" --infobox "\nDisabling Wi-Fi..." 5 30 > "$CURR_TTY"
+    rfkill block wifi
+    if command -v nmcli &>/dev/null; then
+        nmcli radio wifi off
+    fi
+    systemctl stop wpa_supplicant 2>/dev/null || true
     sleep 1
     
-systemctl start wifi-icon-updater.service || true
-    restart_es_and_exit
+    EjectModule
 
+    sleep 1
+    EjectWifi
+    sleep 1
+    OTG
+    sleep 2
+    
+    dialog --title "Wi-Fi & OTG port" --msgbox "\nWi-Fi disabled.\nOTG port is now ready.." 8 30 > "$CURR_TTY"
+    
+systemctl start wifi-icon-updater.service || true
+    
+    ExitMenu
 }
 
 enable_wifi_core() {
@@ -259,50 +352,30 @@ enable_wifi_core() {
 }
 
 enable_wifi() {
-systemctl stop wifi-icon-updater.service || true
-    dialog --infobox "Enabling Wi-Fi..." 3 30 > "$CURR_TTY"
+    
+    if command -v nmcli &>/dev/null && [[ "$(nmcli radio wifi)" == "enabled" ]]; then
+    dialog --title "Wi-Fi" --msgbox "\nWi-Fi already connected." 7 30 > "$CURR_TTY"
+    return
+fi
+    
+    dialog --title "Wi-Fi" --infobox "\nEnabling Wi-Fi..." 5 30 > "$CURR_TTY"
+    OTG
     enable_wifi_core
+    sleep 1
     
     local iface_check
     iface_check=$(ip link show | awk '/wlan[0-9]+:/ {gsub(":", ""); print $2; exit}' || true)
     if [[ -n "$iface_check" ]] && ip link show "$iface_check" | grep -q "state UP"; then
-        dialog --msgbox "Wi-Fi enabled. Connection established." 5 50 > "$CURR_TTY"
+        dialog --title "Wi-Fi" --msgbox "\nWi-Fi enabled. Connection established." 6 50 > "$CURR_TTY"
     else
-        dialog --msgbox "Wi-Fi enabled." 5 20 > "$CURR_TTY"
+        dialog --title "Wi-Fi" --infobox "\nWi-Fi enabled\nWaiting for connection..." 6 30 > "$CURR_TTY"
     fi
     
-    enable_wifi_core
+    systemctl start wifi-usb-old-scheme.service
     
-    dialog --title "Restarting" --infobox "\nEmulationStation will now restart to apply changes..." 4 55 > "$CURR_TTY"
-    sleep 1
+    sleep 20
     
-systemctl start wifi-icon-updater.service || true
-    restart_es_and_exit
-    
-}
-
-    # Remove USB Wi-Fi module if path exists
-EjectWifi() {
-    if [[ -d "$WIFI_USB_PATH" ]]; then
-        dialog --infobox "Ejecting Wi-Fi module..." 3 30 > "$CURR_TTY"
-        echo 1 > "$WIFI_USB_PATH/remove" || true
-        sleep 2
-        dialog --msgbox "Wi-Fi module ejected." 5 30 > "$CURR_TTY"
-    else
-        dialog --msgbox "Wi-Fi module already ejected." 5 40 > "$CURR_TTY"
-    fi
-}
-
-RebootSystem() {
-    dialog --infobox "Rebooting system..." 3 30 > "$CURR_TTY"
-    sleep 2
-    printf "\033c" > "$CURR_TTY" 
-    printf "\e[?25h" > "$CURR_TTY" # Show cursor
-    pkill -f "gptokeyb -1 wifi-toggle.sh" || true
-    if [[ ! -e "/dev/input/by-path/platform-odroidgo2-joypad-event-joystick" ]]; then
-        setfont /usr/share/consolefonts/Lat7-Terminus20x10.psf.gz # Restore a common font
-    fi    
-    exec systemctl reboot
+    ExitMenu
 }
 
 ExitMenu() {
@@ -316,7 +389,7 @@ ExitMenu() {
 }
 
 restart_es_and_exit() {
-    dialog --title "Restarting" --infobox "\nEmulationStation will now restart to apply changes..." 4 55 > "$CURR_TTY"
+    dialog --title "Restarting" --infobox "\nEmulationStation will now restart to apply changes..." 6 55 > "$CURR_TTY"
     sleep 2
     systemctl restart emulationstation &
     ExitMenu
@@ -325,15 +398,24 @@ restart_es_and_exit() {
 create_updater_script() {
     cat > "$UPDATER_PATH" << 'EOF'
 #!/bin/bash
-THEMES_DIR="/roms/themes"
-UPDATE_INTERVAL=4
 
-prev_wifi_enabled=""
+THEMES_DIR="/roms/themes"
+UPDATE_INTERVAL=0.5
+prev_state=""
 
 while true; do
-    wifi_enabled=$(nmcli radio wifi)
+    current_state="disconnected"
 
-    if [[ "$wifi_enabled" != "$prev_wifi_enabled" ]]; then
+    # Vérifie si le Wi-Fi est connecté
+    if nmcli -t -f DEVICE,STATE dev | grep -qE "^wlan.*:connected$"; then
+        current_state="connected"
+    elif ip link show | grep -qE "wlan[0-9]+.*state UP"; then
+        current_state="connecting"
+    fi
+
+    if [[ "$current_state" != "$prev_state" ]]; then
+        need_restart=false
+
         for theme_path in "$THEMES_DIR"/*; do
             [ -d "$theme_path" ] || continue
             art_dir="$theme_path/_art"
@@ -344,19 +426,33 @@ while true; do
             on_bak="$art_dir/wifi_on.bak.svg"
             off_bak="$art_dir/wifi_off.bak.svg"
 
-            if [[ "$wifi_enabled" == enabled* ]]; then
-                [[ -f "$on_bak" ]] && cp "$on_bak" "$icon_file"
+            if [[ "$current_state" == "connected" ]]; then
+                if [[ -f "$on_bak" ]]; then
+                    if [[ ! -f "$icon_file" ]] || ! cmp -s "$on_bak" "$icon_file"; then
+                        cp "$on_bak" "$icon_file"
+                        need_restart=true
+                    fi
+                fi
             else
-                [[ -f "$off_bak" ]] && cp "$off_bak" "$icon_file"
+                if [[ -f "$off_bak" ]]; then
+                    if [[ ! -f "$icon_file" ]] || ! cmp -s "$off_bak" "$icon_file"; then
+                        cp "$off_bak" "$icon_file"
+                        need_restart=true
+                    fi
+                fi
             fi
         done
 
-        systemctl restart emulationstation
-        prev_wifi_enabled="$wifi_enabled"
+        if [ "$need_restart" = true ]; then
+            systemctl restart emulationstation
+        fi
+
+        prev_state="$current_state"
     fi
 
     sleep "$UPDATE_INTERVAL"
 done
+
 EOF
     chmod +x "$UPDATER_PATH"
 }
@@ -365,11 +461,15 @@ create_systemd_service() {
     cat > "$SERVICE_PATH" << EOF
 [Unit]
 Description=Wi-Fi Icon State Updater
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 ExecStart=$UPDATER_PATH
 Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -377,43 +477,28 @@ EOF
 
     systemctl daemon-reexec
     systemctl daemon-reload
-    systemctl enable --now wifi-icon-updater.service
+    systemctl enable --now "$(basename "$SERVICE_PATH")"
 }
 
 themes_already_patched() {
     local all_patched=true
     for theme_path in "$THEMES_DIR"/*; do
         [ -d "$theme_path" ] || continue
-        theme_xml_file="$theme_path/theme.xml"
-        [ ! -f "$theme_xml_file" ] && continue
         if [ ! -f "$theme_path/$PATCH_MARKER" ]; then
-            all_patched=false
-            break
+            return 1  
         fi
     done
 
-    # Vérifie aussi NES-box
-    NESBOX_PATH="$THEMES_DIR/es-theme-nes-box"
-    if [ -d "$NESBOX_PATH" ] && [ ! -f "$NESBOX_PATH/$MAINXML_MARKER" ]; then
-        all_patched=false
-    fi
-    
-    # Vérifie aussi sagabox
-    SAGABOX_PATH="$THEMES_DIR/es-theme-sagabox"
-    if [ -d "$SAGABOX_PATH" ] && [ ! -f "$SAGABOX_PATH/$HEADERXML_MARKER" ]; then
-        all_patched=false
-    fi
-
-    $all_patched
+    return 0  
 }
 
 install_icons() {
     if themes_already_patched; then
-        dialog --title "Already Patched" --msgbox "All themes are already patched.\nNo changes necessary." 6 50 > "$CURR_TTY"
+        dialog --title "Already Patched" --msgbox "\nAll themes are already patched.\nNo changes necessary." 8 50 > "$CURR_TTY"
         return
     fi
     
-    dialog --title "Installing Icons" --infobox "Processing themes, please wait...\nThis may take a moment." 5 55 > "$CURR_TTY"
+    dialog --title "Installing Icons" --infobox "\nProcessing themes, please wait...\nThis may take a moment." 7 55 > "$CURR_TTY"
     sleep 2
 
     local progress_text=""
@@ -468,7 +553,7 @@ EOF
             progress_text+="Patched: $(basename "$theme_path")\n"
         done
 
-        # Patch spécifique pour es-theme-nes-box
+        # Specific patch for es-theme-nes-box
         NESBOX_PATH="$THEMES_DIR/es-theme-nes-box"
         if [ -d "$NESBOX_PATH" ] && [ ! -f "$NESBOX_PATH/$MAINXML_MARKER" ]; then
             nesbox_xml="$NESBOX_PATH/main.xml"
@@ -509,7 +594,7 @@ EOF
             fi
         fi
         
-        # Patch spécifique pour es-theme-sagabox
+        # Specific patch for es-theme-sagabox
         SAGABOX_PATH="$THEMES_DIR/es-theme-sagabox"
         if [ -d "$SAGABOX_PATH" ] && [ ! -f "$SAGABOX_PATH/$HEADERXML_MARKER" ]; then
             for sagabox_xml in "$SAGABOX_PATH/header.xml" "$SAGABOX_PATH/rgb30.xml" "$SAGABOX_PATH/ogs.xml" "$SAGABOX_PATH/503.xml" "$SAGABOX_PATH/fullscreen.xml" "$SAGABOX_PATH/fullscreenv.xml"; do
@@ -550,35 +635,35 @@ EOF
         fi
     } >/dev/null 2>&1
 
-    dialog --title "Done" --msgbox "Installation complete.\n\n$progress_text" 0 0 > "$CURR_TTY"
+    dialog --title "Installation complete" --msgbox "\n$progress_text" 0 0 > "$CURR_TTY"
     create_updater_script
     create_systemd_service
     restart_es_and_exit
 }
 
 uninstall_icons() {
-    dialog --title "Uninstalling Icons" --infobox "Restoring themes..." 4 45 > "$CURR_TTY"
+    dialog --title "Uninstalling Icons" --infobox "\nRestoring themes..." 5 45 > "$CURR_TTY"
     sleep 2
     local progress_text=""
 
     for theme_path in "$THEMES_DIR"/*; do
         [ -d "$theme_path" ] || continue
 
-        # 1. Restaure theme.xml (standard)
+        # 1. Restore all theme.xml 
         xml="$theme_path/theme.xml"
         if [ -f "$theme_path/$PATCH_MARKER" ] && [ -f "$xml.bak" ]; then
             mv "$xml.bak" "$xml"
             rm -f "$theme_path/$PATCH_MARKER"
         fi
 
-        # 2. Restaure NES-box
+        # 2. Restore NES-box
         xml="$theme_path/main.xml"
         if [ -f "$theme_path/$MAINXML_MARKER" ] && [ -f "$xml.bak" ]; then
             mv "$xml.bak" "$xml"
             rm -f "$theme_path/$MAINXML_MARKER"
         fi
 
-        # 3. Supprime les icônes SVG sauf pour Sagabox (géré plus loin)
+        # Removes SVG icons except for Sagabox (managed later)
         if [[ "$(basename "$theme_path")" != "es-theme-sagabox" ]]; then
             rm -f "$theme_path"/{art,_art}/wifi_*.svg
         fi
@@ -586,7 +671,7 @@ uninstall_icons() {
         progress_text+="Cleaned: $(basename "$theme_path")\n"
     done
 
-    # 4. Restaure sagabox 
+    # 4. Restore sagabox 
     SAGABOX_PATH="$THEMES_DIR/es-theme-sagabox"
     if [ -d "$SAGABOX_PATH" ] && [ -f "$SAGABOX_PATH/$HEADERXML_MARKER" ]; then
         for sagabox_xml in \
@@ -606,12 +691,12 @@ uninstall_icons() {
         progress_text+="Cleaned: es-theme-sagabox\n"
     fi
 
-    # 5. Nettoyage système
+    # System cleaning
     rm -f "$UPDATER_PATH"
     rm -f "$SERVICE_PATH"
     systemctl daemon-reload
 
-    dialog --title "Uninstall Complete" --msgbox "$progress_text" 0 0 > "$CURR_TTY"
+    dialog --title "Uninstall Complete" --msgbox "\n$progress_text" 0 0 > "$CURR_TTY"
     restart_es_and_exit
 }
 
@@ -622,26 +707,22 @@ MainMenu() {
         WIFI_STATUS=$(get_wifi_status)
         local CHOICE
         CHOICE=$(dialog --output-fd 1 \
-            --backtitle "Wi-Fi Management v2.0 - R36S - By Jason" \
+            --backtitle "Wi-Fi Management v3.0 - R36S - By Jason" \
             --title "Wi-Fi Manager" \
             --menu "\nCurrent Wi-Fi Status: $WIFI_STATUS" 16 50 7 \
             1 "Install Wi-Fi icons" \
             2 "Enable Wi-Fi" \
-            3 "Disable Wi-Fi" \
-            4 "Eject Wi-Fi" \
-            5 "Uninstall Wi-Fi icons" \
-            6 "Reboot System" \
-            7 "Exit" \
+            3 "Disable Wi-Fi & detect Usb" \
+            4 "Uninstall Wi-Fi icons" \
+            5 "Exit" \
         2>"$CURR_TTY")
 
         case $CHOICE in
             1) install_icons ;;
             2) enable_wifi ;;        
             3) disable_wifi ;;
-            4) EjectWifi ;;
-            5) uninstall_icons;;
-            6) RebootSystem ;;
-            7) ExitMenu ;;
+            4) uninstall_icons;;
+            5) ExitMenu ;;
             *) ExitMenu ;;
         esac
     done
