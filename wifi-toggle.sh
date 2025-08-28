@@ -553,8 +553,8 @@ EOF
             progress_text+="Patched: $(basename "$theme_path")\n"
         done
 
-        # Specific patch for es-theme-nes-box
-        NESBOX_PATH="$THEMES_DIR/es-theme-nes-box"
+        # Specific patch for R36S-theme-nes-box
+        NESBOX_PATH="$THEMES_DIR/R36-theme-nes-box"
         if [ -d "$NESBOX_PATH" ] && [ ! -f "$NESBOX_PATH/$MAINXML_MARKER" ]; then
             nesbox_xml="$NESBOX_PATH/main.xml"
             if [ -f "$nesbox_xml" ]; then
