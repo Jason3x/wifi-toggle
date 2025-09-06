@@ -1,6 +1,8 @@
 #!/bin/bash
 
-#----------------------------------------#
+#-----------------------#
+# WiFi Toggle for R36S  #
+#-----------------------#
 
 # --- Root privilege check ---
 if [ "$(id -u)" -ne 0 ]; then
@@ -48,7 +50,7 @@ pkill -9 -f gptokeyb || true
 pkill -9 -f osk.py || true
 
 printf "\033c" > "$CURR_TTY"
-printf "Starting Wifi Toggle v3.0\nPlease wait..." > "$CURR_TTY"
+printf "Starting Wifi Toggle v3.1\nPlease wait..." > "$CURR_TTY"
 sleep 1
 
 # --- Functions ---
@@ -201,21 +203,6 @@ EjectWifi() {
     fi
 }
 
-EjectModule() {
-    local modules_to_process_for_disable=($(detect_wifi_modules) "${PREFERRED_WIFI_MODULES[@]}")
-    local unique_modules_to_disable=($(echo "${modules_to_process_for_disable[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
-
-    if [[ ${#unique_modules_to_disable[@]} -gt 0 ]]; then
-        for mod in "${unique_modules_to_disable[@]}"; do
-            if [[ -z "$mod" ]]; then continue; fi
-            modprobe -r -q "$mod" 2>/dev/null || true
-            if ! grep -qxF "blacklist $mod" /etc/modprobe.d/blacklist.conf 2>/dev/null ; then
-                 echo "blacklist $mod" | tee -a /etc/modprobe.d/blacklist.conf > /dev/null
-            fi
-        done
-    fi
-    deduplicate_blacklist
-}
 
 OTG() {
 if [[ -w /sys/module/usbcore/parameters/old_scheme_first ]]; then
@@ -290,62 +277,68 @@ fi
 }    
 
 disable_wifi() {
-systemctl stop wifi-icon-updater.service || true
-
+    systemctl stop wifi-icon-updater.service || true
     dialog --title "Wi-Fi" --infobox "\nDisabling Wi-Fi..." 5 30 > "$CURR_TTY"
     rfkill block wifi
-    if command -v nmcli &>/dev/null; then
-        nmcli radio wifi off
-    fi
+    command -v nmcli &>/dev/null && nmcli radio wifi off
     systemctl stop wpa_supplicant 2>/dev/null || true
     sleep 1
-    
-    EjectModule
+
+    # Décharge et blacklist TOUS les modules Wi-Fi
+    local all_modules=($(detect_wifi_modules) "${PREFERRED_WIFI_MODULES[@]}")
+    : > /tmp/blacklisted_wifi_modules.txt   # on écrase le fichier à chaque disable
+    for mod in "${all_modules[@]}"; do
+        [[ -z "$mod" ]] && continue
+        echo "$mod" >> /tmp/blacklisted_wifi_modules.txt
+        modprobe -r -q "$mod" 2>/dev/null || true
+        grep -qxF "blacklist $mod" /etc/modprobe.d/blacklist.conf || echo "blacklist $mod" >> /etc/modprobe.d/blacklist.conf
+    done
+    deduplicate_blacklist
 
     sleep 1
     EjectWifi
     sleep 1
     OTG
     sleep 2
-    
-    dialog --title "Wi-Fi & OTG port" --msgbox "\nWi-Fi disabled.\nOTG port is now ready.." 8 30 > "$CURR_TTY"
-    
-systemctl start wifi-icon-updater.service || true
-    
+
+    dialog --title "Wi-Fi & OTG port" --msgbox "\nWi-Fi disabled.\nOTG port ready." 8 30 > "$CURR_TTY"
+    systemctl start wifi-icon-updater.service || true
     ExitMenu
 }
 
 enable_wifi_core() {
     local module_loaded_successfully=false
-    local module_actually_loaded=""
 
     rfkill unblock wifi
-    if command -v nmcli &>/dev/null; then
-        nmcli radio wifi on
+    command -v nmcli &>/dev/null && nmcli radio wifi on
+
+    # --- Supprime du blacklist + recharge tous les modules sauvegardés ---
+    if [[ -f /tmp/blacklisted_wifi_modules.txt ]]; then
+        while read -r mod; do
+            [[ -z "$mod" ]] && continue
+            # Retirer de la blacklist
+            sed -i "/^blacklist\s\+$mod\b/d" /etc/modprobe.d/blacklist.conf 2>/dev/null || true
+            # Recharger le module
+            if modprobe "$mod" 2>/dev/null; then
+                module_loaded_successfully=true
+            fi
+        done < /tmp/blacklisted_wifi_modules.txt
+        rm -f /tmp/blacklisted_wifi_modules.txt
+        deduplicate_blacklist
     fi
 
-    for mod_to_unblacklist in "${PREFERRED_WIFI_MODULES[@]}"; do
-        sed -i "/^blacklist\s\+$mod_to_unblacklist\b/d" /etc/modprobe.d/blacklist.conf 2>/dev/null || true
-    done
-
-    for preferred_mod in "${PREFERRED_WIFI_MODULES[@]}"; do
-        if modprobe "$preferred_mod" 2>/dev/null; then
-            module_loaded_successfully=true
-            module_actually_loaded="$preferred_mod"
-        fi
-    done
     update-initramfs -u
 
     if $module_loaded_successfully; then
         systemctl restart wpa_supplicant >/dev/null 2>&1 || systemctl start wpa_supplicant >/dev/null 2>&1
         sleep 0.5
-        local iface_check
-        iface_check=$(ip link show | awk '/wlan[0-9]+:/ {gsub(":", ""); print $2; exit}' || true)
-        if [[ -n "$iface_check" ]]; then
-            ip link set "$iface_check" down 2>/dev/null || true
+        local iface
+        iface=$(ip link show | awk '/wlan[0-9]+:/ {gsub(":", ""); print $2; exit}' || true)
+        [[ -n "$iface" ]] && {
+            ip link set "$iface" down 2>/dev/null || true
             sleep 0.5
-            ip link set "$iface_check" up 2>/dev/null || true
-        fi
+            ip link set "$iface" up 2>/dev/null || true
+        }
     else
         systemctl stop wpa_supplicant >/dev/null 2>&1 || true
     fi
@@ -553,8 +546,8 @@ EOF
             progress_text+="Patched: $(basename "$theme_path")\n"
         done
 
-        # Specific patch for R36S-theme-nes-box
-        NESBOX_PATH="$THEMES_DIR/R36-theme-nes-box"
+        # Specific patch for es-theme-nes-box
+        NESBOX_PATH="$THEMES_DIR/R36S-theme-nes-box"
         if [ -d "$NESBOX_PATH" ] && [ ! -f "$NESBOX_PATH/$MAINXML_MARKER" ]; then
             nesbox_xml="$NESBOX_PATH/main.xml"
             if [ -f "$nesbox_xml" ]; then
@@ -707,7 +700,7 @@ MainMenu() {
         WIFI_STATUS=$(get_wifi_status)
         local CHOICE
         CHOICE=$(dialog --output-fd 1 \
-            --backtitle "Wi-Fi Management v3.0 - R36S - By Jason" \
+            --backtitle "Wi-Fi Management v3.1 - R36S - By Jason" \
             --title "Wi-Fi Manager" \
             --menu "\nCurrent Wi-Fi Status: $WIFI_STATUS" 16 50 7 \
             1 "Install Wi-Fi icons" \
