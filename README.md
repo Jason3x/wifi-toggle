@@ -1,3 +1,5 @@
+# wifi-toggle v3.1
+Add support all wifi module
 
 # wifi-toggle v3.0 
 - USB media drive detection 
