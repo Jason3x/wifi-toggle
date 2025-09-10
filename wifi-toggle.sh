@@ -353,8 +353,10 @@ fi
     
     dialog --title "Wi-Fi" --infobox "\nEnabling Wi-Fi..." 5 30 > "$CURR_TTY"
     OTG
+    sleep 1
     enable_wifi_core
     sleep 1
+    OTG
     
     local iface_check
     iface_check=$(ip link show | awk '/wlan[0-9]+:/ {gsub(":", ""); print $2; exit}' || true)
