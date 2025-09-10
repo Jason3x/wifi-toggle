@@ -1,3 +1,6 @@
+# wifi-toggle v3.2
+Fixed some bugs
+
 # wifi-toggle v3.1
 Add support all wifi module
 
