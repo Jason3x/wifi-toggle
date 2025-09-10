@@ -50,7 +50,7 @@ pkill -9 -f gptokeyb || true
 pkill -9 -f osk.py || true
 
 printf "\033c" > "$CURR_TTY"
-printf "Starting Wifi Toggle v3.1\nPlease wait..." > "$CURR_TTY"
+printf "Starting Wifi Toggle v3.2\nPlease wait..." > "$CURR_TTY"
 sleep 1
 
 # --- Functions ---
@@ -196,13 +196,11 @@ deduplicate_blacklist() {
     awk '!x[$0]++' "$blacklist_file" > "${blacklist_file}.tmp" && mv "${blacklist_file}.tmp" "$blacklist_file"
 }
 
-
 EjectWifi() {
     if [[ -d "$WIFI_USB_PATH" ]]; then
         echo 1 > "$WIFI_USB_PATH/remove" || true
     fi
 }
-
 
 OTG() {
 if [[ -w /sys/module/usbcore/parameters/old_scheme_first ]]; then
@@ -344,32 +342,71 @@ enable_wifi_core() {
     fi
 }
 
+is_wifi_module_loaded() {
+    local loaded=false
+    # Vérifie d'abord les modules préférés
+    for mod in "${PREFERRED_WIFI_MODULES[@]}"; do
+        if lsmod | grep -qw "$mod"; then
+            loaded=true
+            break
+        fi
+    done
+
+    # Vérifie aussi tous les modules dans /tmp/blacklisted_wifi_modules.txt
+    if [[ "$loaded" == false ]] && [[ -f /tmp/blacklisted_wifi_modules.txt ]]; then
+        while read -r mod; do
+            [[ -z "$mod" ]] && continue
+            if lsmod | grep -qw "$mod"; then
+                loaded=true
+                break
+            fi
+        done < /tmp/blacklisted_wifi_modules.txt
+    fi
+
+    echo "$loaded"
+}
+
 enable_wifi() {
-    
-    if command -v nmcli &>/dev/null && [[ "$(nmcli radio wifi)" == "enabled" ]]; then
-    dialog --title "Wi-Fi" --msgbox "\nWi-Fi already connected." 7 30 > "$CURR_TTY"
-    return
-fi
-    
+    local modules_loaded
+    modules_loaded=$(is_wifi_module_loaded)
+
+    # Vérifie si Wi-Fi déjà activé
+    if [[ "$modules_loaded" == "true" ]] && command -v nmcli &>/dev/null && [[ "$(nmcli radio wifi)" == "enabled" ]]; then
+        dialog --title "Wi-Fi" --msgbox "\nWi-Fi already connected." 7 30 > "$CURR_TTY"
+        return
+    fi
+
     dialog --title "Wi-Fi" --infobox "\nEnabling Wi-Fi..." 5 30 > "$CURR_TTY"
+    
+    # OTG et chargement des modules
     OTG
     sleep 1
     enable_wifi_core
-    sleep 1
     OTG
-    
+
+    # Attente dynamique de l'interface WLAN
     local iface_check
-    iface_check=$(ip link show | awk '/wlan[0-9]+:/ {gsub(":", ""); print $2; exit}' || true)
-    if [[ -n "$iface_check" ]] && ip link show "$iface_check" | grep -q "state UP"; then
-        dialog --title "Wi-Fi" --msgbox "\nWi-Fi enabled. Connection established." 6 50 > "$CURR_TTY"
-    else
+    local timeout=20  
+    local elapsed=0
+    local interval=1
+    while [[ $elapsed -lt $timeout ]]; do
+        iface_check=$(ip link show | awk '/wlan[0-9]+:/ {gsub(":", ""); print $2; exit}' || true)
+        if [[ -n "$iface_check" ]] && ip link show "$iface_check" | grep -q "state UP"; then
+            dialog --title "Wi-Fi" --msgbox "\nWi-Fi enabled. Connection established." 6 50 > "$CURR_TTY"
+            break
+        fi
+        sleep $interval
+        elapsed=$((elapsed + interval))
+    done
+
+    # Si l'interface n'est toujours pas UP après le timeout
+    if [[ -z "$iface_check" ]] || ! ip link show "$iface_check" | grep -q "state UP"; then
         dialog --title "Wi-Fi" --infobox "\nWi-Fi enabled\nWaiting for connection..." 6 30 > "$CURR_TTY"
     fi
-    
+
+    # Démarrage du service OTG persistant
     systemctl start wifi-usb-old-scheme.service
-    
-    sleep 20
-    
+
     ExitMenu
 }
 
@@ -702,12 +739,12 @@ MainMenu() {
         WIFI_STATUS=$(get_wifi_status)
         local CHOICE
         CHOICE=$(dialog --output-fd 1 \
-            --backtitle "Wi-Fi Management v3.1 - R36S - By Jason" \
+            --backtitle "Wi-Fi Management v3.2 - R36S - By Jason" \
             --title "Wi-Fi Manager" \
             --menu "\nCurrent Wi-Fi Status: $WIFI_STATUS" 16 50 7 \
             1 "Install Wi-Fi icons" \
             2 "Enable Wi-Fi" \
-            3 "Disable Wi-Fi & detect Usb" \
+            3 "Disable Wi-Fi & Detect USB Drive" \
             4 "Uninstall Wi-Fi icons" \
             5 "Exit" \
         2>"$CURR_TTY")
