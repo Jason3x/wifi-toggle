@@ -1,3 +1,7 @@
+# wifi-toggle v3.3
+Fixed some bugs for support all modules
+Thank to @niokofast for tests
+
 # wifi-toggle v3.2
 Fixed some bugs
 
