@@ -1,3 +1,6 @@
+# wifi-toggle v3.4
+Add support all themes
+
 # wifi-toggle v3.3
 Fixed some bugs for support all modules
 Thank to @niokofast for tests
