@@ -2,7 +2,7 @@
 
 #-----------------------#
 # WiFi Toggle for R36S  #
-#          v3.3         #
+#          v3.4         #
 #        By Jason       #
 #-----------------------#
 
@@ -52,7 +52,7 @@ pkill -9 -f gptokeyb || true
 pkill -9 -f osk.py || true
 
 printf "\033c" > "$CURR_TTY"
-printf "Starting Wifi Toggle v3.3\nPlease wait..." > "$CURR_TTY"
+printf "Starting Wifi Toggle v3.4\nPlease wait..." > "$CURR_TTY"
 sleep 1
 
 # --- Fonctions pour détecter les modules de noyau Wi-Fi actuellement chargés ---.
@@ -503,41 +503,58 @@ themes_already_patched() {
     return 0  
 }
 
-# --- Fonction pour installer les icônes Wi-Fi dans tous les thèmes ---
+# --- Function to install Wi-Fi icons in all themes ---
 install_icons() {
     if themes_already_patched; then
-        dialog --title "Already Patched" --msgbox "\nAll themes are already patched.\nNo changes necessary." 8 50 > "$CURR_TTY"
+        dialog --title "Already Patched" --msgbox "\nAll themes are already patched.\nNo changes are necessary." 8 S50 > "$CURR_TTY"
         return
     fi
     
     dialog --title "Installing Icons" --infobox "\nProcessing themes, please wait...\nThis may take a moment." 7 55 > "$CURR_TTY"
     sleep 2
 
+    # List of XML files to patch in each theme
+    local target_xml_files=("theme.xml" "main.xml" "header.xml" "rgb30.xml" "ogs.xml" "503.xml" "fullscreen.xml" "fullscreenv.xml")
     local progress_text=""
     
-    {
-        for theme_path in "$THEMES_DIR"/*; do
-            [ -d "$theme_path" ] || continue
-            theme_xml_file="$theme_path/theme.xml"
-            [ ! -f "$theme_xml_file" ] && continue
-            [ -f "$theme_path/$PATCH_MARKER" ] && continue
-            cp "$theme_xml_file" "${theme_xml_file}.bak"
-            art_dir="$theme_path/_art"
-            [ -d "$art_dir" ] || art_dir="$theme_path/art"
-            mkdir -p "$art_dir"
-            icon_path_prefix=$(realpath --relative-to="$theme_path" "$art_dir")
-            cat > "$art_dir/wifi_on.bak.svg" << 'EOF'
+    for theme_path in "$THEMES_DIR"/*; do
+        [ -d "$theme_path" ] || continue
+        # If a theme is already marked as patched, skip it
+        [ -f "$theme_path/$PATCH_MARKER" ] && continue
+
+        local theme_was_patched=false
+        local art_dir=""
+        local xml_block=""
+
+        # Loop through the list of target XML files
+        for xml_file in "${target_xml_files[@]}"; do
+            local theme_xml_file="$theme_path/$xml_file"
+
+            # If the XML file exists, process it
+            if [ -f "$theme_xml_file" ]; then
+
+                # One-time initialization per theme (create SVGs, etc.)
+                if [[ -z "$art_dir" ]]; then
+                    art_dir="$theme_path/_art"
+                    [ -d "$art_dir" ] || art_dir="$theme_path/art"
+                    mkdir -p "$art_dir"
+
+                    # Create SVG icons
+                    cat > "$art_dir/wifi_on.bak.svg" << 'EOF'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" stroke="#28a745" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
   <path d="M4 16 C12 8, 24 8, 32 16" /><path d="M8 20 C14 14, 22 14, 28 20" /><path d="M12 24 C16 20, 20 20, 24 24" /><circle cx="18" cy="28" r="1.5" fill="#28a745" />
 </svg>
 EOF
-            cat > "$art_dir/wifi_off.bak.svg" << 'EOF'
+                    cat > "$art_dir/wifi_off.bak.svg" << 'EOF'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" stroke="#dc3545" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
   <path d="M4 16 C12 8, 24 8, 32 16" /><path d="M8 20 C14 14, 22 14, 28 20" /><path d="M12 24 C16 20, 20 20, 24 24" /><circle cx="18" cy="28" r="1.5" fill="#dc3545" /><line x1="6" y1="6" x2="30" y2="30" stroke="#dc3545" />
 </svg>
 EOF
-            cp "$art_dir/wifi_on.bak.svg" "$art_dir/wifi.svg"
-            xml_block="
+                    cp "$art_dir/wifi_on.bak.svg" "$art_dir/wifi.svg"
+
+                    # Prepare the XML block to be inserted
+                    local icon_path_prefix=$(realpath --relative-to="$theme_path" "$art_dir")
+                    xml_block="
     <image name=\"wifi_icon\" extra=\"true\">
         <path>./$icon_path_prefix/wifi.svg</path>
         <pos>${WIFI_ICON_POS_X} ${WIFI_ICON_POS_Y}</pos>
@@ -546,109 +563,70 @@ EOF
         <zIndex>150</zIndex>
         <visible>true</visible>
     </image>"
-            awk -v block="$xml_block" '/<view / { print; print block; next } { print }' "$theme_xml_file" > "${theme_xml_file}.tmp" && mv "${theme_xml_file}.tmp" "$theme_xml_file"
+                fi
+
+                # Patch the XML file
+                cp "$theme_xml_file" "${theme_xml_file}.bak"
+                # This awk command is generic enough to work with most views
+                awk -v block="$xml_block" '/<view / { print; print block; next } { print }' "$theme_xml_file" > "${theme_xml_file}.tmp" && mv "${theme_xml_file}.tmp" "$theme_xml_file"
+                theme_was_patched=true
+            fi
+        done
+
+        # If at least one file was patched in this theme, mark it
+        if [ "$theme_was_patched" = true ]; then
             touch "$theme_path/$PATCH_MARKER"
             progress_text+="Patched: $(basename "$theme_path")\n"
-        done
-        NESBOX_PATH="$THEMES_DIR/R36S-theme-nes-box"
-        if [ -d "$NESBOX_PATH" ] && [ ! -f "$NESBOX_PATH/$MAINXML_MARKER" ]; then
-            nesbox_xml="$NESBOX_PATH/main.xml"
-            if [ -f "$nesbox_xml" ]; then
-                cp "$nesbox_xml" "${nesbox_xml}.bak"
-                art_dir="$NESBOX_PATH/_art"
-                mkdir -p "$art_dir"
-                if [ ! -f "$art_dir/wifi_on.bak.svg" ]; then
-                    cat > "$art_dir/wifi_on.bak.svg" << 'EOF'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" stroke="#28a745" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16 C12 8, 24 8, 32 16" /><path d="M8 20 C14 14, 22 14, 28 20" /><path d="M12 24 C16 20, 20 20, 24 24" /><circle cx="18" cy="28" r="1.5" fill="#28a745" /></svg>
-EOF
-                    cat > "$art_dir/wifi_off.bak.svg" << 'EOF'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" stroke="#dc3545" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16 C12 8, 24 8, 32 16" /><path d="M8 20 C14 14, 22 14, 28 20" /><path d="M12 24 C16 20, 20 20, 24 24" /><circle cx="18" cy="28" r="1.5" fill="#dc3545" /><line x1="6" y1="6" x2="30" y2="30" stroke="#dc3545" /></svg>
-EOF
-                fi
-                cp "$art_dir/wifi_on.bak.svg" "$art_dir/wifi.svg"
-                icon_path_prefix=$(realpath --relative-to="$NESBOX_PATH" "$art_dir")
-                xml_block="
-    <image name=\"wifi_icon\" extra=\"true\"><path>./$icon_path_prefix/wifi.svg</path><pos>${WIFI_ICON_POS_X} ${WIFI_ICON_POS_Y}</pos><origin>0.5 0.5</origin><maxSize>${WIFI_ICON_SIZE} ${WIFI_ICON_SIZE}</maxSize><zIndex>150</zIndex><visible>true</visible></image>"
-                awk -v block="$xml_block" '/<view name="system">/ || /<view name="detailed,video">/ || /<view name="basic">/ { print; print block; next; } { print }' "$nesbox_xml" > "${nesbox_xml}.tmp" && mv "${nesbox_xml}.tmp" "$nesbox_xml"
-                touch "$NESBOX_PATH/$MAINXML_MARKER"
-            fi
         fi
-        SAGABOX_PATH="$THEMES_DIR/es-theme-sagabox"
-        if [ -d "$SAGABOX_PATH" ] && [ ! -f "$SAGABOX_PATH/$HEADERXML_MARKER" ]; then
-            for sagabox_xml in "$SAGABOX_PATH/header.xml" "$SAGABOX_PATH/rgb30.xml" "$SAGABOX_PATH/ogs.xml" "$SAGABOX_PATH/503.xml" "$SAGABOX_PATH/fullscreen.xml" "$SAGABOX_PATH/fullscreenv.xml"; do
-                [ -f "$sagabox_xml" ] || continue
-                cp "$sagabox_xml" "${sagabox_xml}.bak"
-                art_dir="$SAGABOX_PATH/_art"
-                mkdir -p "$art_dir"
-                if [ ! -f "$art_dir/wifi_on.bak.svg" ]; then
-                    cat > "$art_dir/wifi_on.bak.svg" << 'EOF'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" stroke="#28a745" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16 C12 8, 24 8, 32 16" /><path d="M8 20 C14 14, 22 14, 28 20" /><path d="M12 24 C16 20, 20 20, 24 24" /><circle cx="18" cy="28" r="1.5" fill="#28a745" /></svg>
-EOF
-                    cat > "$art_dir/wifi_off.bak.svg" << 'EOF'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" stroke="#dc3545" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16 C12 8, 24 8, 32 16" /><path d="M8 20 C14 14, 22 14, 28 20" /><path d="M12 24 C16 20, 20 20, 24 24" /><circle cx="18" cy="28" r="1.5" fill="#dc3545" /><line x1="6" y1="6" x2="30" y2="30" stroke="#dc3545" /></svg>
-EOF
-                fi
-                cp "$art_dir/wifi_on.bak.svg" "$art_dir/wifi.svg"
-                icon_path_prefix=$(realpath --relative-to="$SAGABOX_PATH" "$art_dir")
-                xml_block="
-    <image name=\"wifi_icon\" extra=\"true\"><path>./$icon_path_prefix/wifi.svg</path><pos>${WIFI_ICON_POS_X} ${WIFI_ICON_POS_Y}</pos><origin>0.5 0.5</origin><maxSize>${WIFI_ICON_SIZE} ${WIFI_ICON_SIZE}</maxSize><zIndex>150</zIndex><visible>true</visible></image>"
-                awk -v block="$xml_block" '/<view name="system">/ || /<view name="detailed,video">/ || /<view name="basic">/ { print; print block; next; } { print }' "$sagabox_xml" > "${sagabox_xml}.tmp" && mv "${sagabox_xml}.tmp" "$sagabox_xml"
-            done
-            touch "$SAGABOX_PATH/$HEADERXML_MARKER"
-        fi
-    } >/dev/null 2>&1
+    done
 
-    dialog --title "Installation complete" --msgbox "\n$progress_text" 0 0 > "$CURR_TTY"
+    dialog --title "Installation Complete" --msgbox "\n$progress_text" 0 0 > "$CURR_TTY"
     create_updater_script
     create_systemd_service
     restart_es_and_exit
 }
 
-
-# --- Fonction pour supprimer les icônes Wi-Fi ---
+# --- Function to uninstall Wi-Fi icons ---
 uninstall_icons() {
     dialog --title "Uninstalling Icons" --infobox "\nRestoring themes..." 5 45 > "$CURR_TTY"
     sleep 2
     local progress_text=""
+    
+    # List of XML files that could have been patched
+    local target_xml_files=("theme.xml" "main.xml" "header.xml" "rgb30.xml" "ogs.xml" "503.xml" "fullscreen.xml" "fullscreenv.xml")
 
     for theme_path in "$THEMES_DIR"/*; do
         [ -d "$theme_path" ] || continue
-        xml="$theme_path/theme.xml"
-        if [ -f "$theme_path/$PATCH_MARKER" ] && [ -f "$xml.bak" ]; then
-            mv "$xml.bak" "$xml"
+
+        # Only clean up if the patch marker is present
+        if [ -f "$theme_path/$PATCH_MARKER" ]; then
+            # Restore backups for all potential XML files
+            for xml_file in "${target_xml_files[@]}"; do
+                local theme_xml_file="$theme_path/$xml_file"
+                if [ -f "${theme_xml_file}.bak" ]; then
+                    mv "${theme_xml_file}.bak" "$theme_xml_file"
+                fi
+            done
+            
+            # Remove added files
             rm -f "$theme_path/$PATCH_MARKER"
-        fi
-        xml="$theme_path/main.xml"
-        if [ -f "$theme_path/$MAINXML_MARKER" ] && [ -f "$xml.bak" ]; then
-            mv "$xml.bak" "$xml"
-            rm -f "$theme_path/$MAINXML_MARKER"
-        fi
-        if [[ "$(basename "$theme_path")" != "es-theme-sagabox" ]]; then
             rm -f "$theme_path"/{art,_art}/wifi_*.svg
+
+            progress_text+="Cleaned: $(basename "$theme_path")\n"
         fi
-        progress_text+="Cleaned: $(basename "$theme_path")\n"
     done
 
-    SAGABOX_PATH="$THEMES_DIR/es-theme-sagabox"
-    if [ -d "$SAGABOX_PATH" ] && [ -f "$SAGABOX_PATH/$HEADERXML_MARKER" ]; then
-        for sagabox_xml in "$SAGABOX_PATH/header.xml" "$SAGABOX_PATH/rgb30.xml" "$SAGABOX_PATH/ogs.xml" "$SAGABOX_PATH/503.xml" "$SAGABOX_PATH/fullscreen.xml" "$SAGABOX_PATH/fullscreenv.xml"; do
-            [ -f "$sagabox_xml.bak" ] && mv "$sagabox_xml.bak" "$sagabox_xml"
-        done
-        rm -f "$SAGABOX_PATH/$HEADERXML_MARKER"
-        rm -f "$SAGABOX_PATH"/{art,_art}/wifi_*.svg
-        progress_text+="Cleaned: es-theme-sagabox\n"
-    fi
-
-    # Nettoyage du systeme
+    # System cleanup
     rm -f "$UPDATER_PATH"
     rm -f "$SERVICE_PATH"
     rm -f /etc/wifi_disabled_modules.list
+    systemctl stop wifi-icon-updater.service >/dev/null 2>&1 || true
+    systemctl disable wifi-icon-updater.service >/dev/null 2>&1 || true
     systemctl daemon-reload
 
     dialog --title "Uninstall Complete" --msgbox "\n$progress_text" 0 0 > "$CURR_TTY"
     restart_es_and_exit
 }
-
 # --- Fonction pour mettre à jour la liste des modules Wi-Fi. ---
 update_preferred_modules() {
     detected_modules_array=($(detect_wifi_modules))
@@ -672,7 +650,7 @@ MainMenu() {
         WIFI_STATUS=$(get_wifi_status)
         local CHOICE
         CHOICE=$(dialog --output-fd 1 \
-            --backtitle "Wi-Fi Management v3.3 - R36S - By Jason" \
+            --backtitle "Wi-Fi Management v3.4 - R36S - By Jason" \
             --title "Wi-Fi Manager" \
             --menu "\nCurrent Wi-Fi Status: $WIFI_STATUS" 16 50 7 \
             1 "Install Wi-Fi icons" \
