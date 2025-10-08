@@ -506,7 +506,7 @@ themes_already_patched() {
 # --- Function to install Wi-Fi icons in all themes ---
 install_icons() {
     if themes_already_patched; then
-        dialog --title "Already Patched" --msgbox "\nAll themes are already patched.\nNo changes are necessary." 8 S50 > "$CURR_TTY"
+        dialog --title "Already Patched" --msgbox "\nAll themes are already patched.\nNo changes are necessary." 8 50 > "$CURR_TTY"
         return
     fi
     
