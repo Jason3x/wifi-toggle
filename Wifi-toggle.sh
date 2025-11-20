@@ -2,7 +2,7 @@
 
 #-----------------------#
 # WiFi Toggle for R36S  #
-#          v3.4         #
+#          v3.5         #
 #        By Jason       #
 #-----------------------#
 
@@ -52,7 +52,7 @@ pkill -9 -f gptokeyb || true
 pkill -9 -f osk.py || true
 
 printf "\033c" > "$CURR_TTY"
-printf "Starting Wifi Toggle v3.4\nPlease wait..." > "$CURR_TTY"
+printf "Starting Wifi Toggle v3.5\nPlease wait..." > "$CURR_TTY"
 sleep 1
 
 # --- Fonctions pour détecter les modules de noyau Wi-Fi actuellement chargés ---.
@@ -212,27 +212,41 @@ EjectWifi() {
 # --- Fonction pour éjecter le module ---
 EjectModule() {
     local disabled_list_file="/etc/wifi_disabled_modules.list"
-    
-    > "$disabled_list_file"
+    : > "$disabled_list_file"
 
+    # Récupère modules détectés + préférés
     local modules_to_process_for_disable=($(detect_wifi_modules) "${PREFERRED_WIFI_MODULES[@]}")
-    local unique_modules_to_disable=($(echo "${modules_to_process_for_disable[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+    local unique_modules_to_disable=($(echo "${modules_to_process_for_disable[@]}" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n' ' '))
 
     if [[ ${#unique_modules_to_disable[@]} -gt 0 ]]; then
+        
         for mod in "${unique_modules_to_disable[@]}"; do
-            if [[ -z "$mod" ]]; then continue; fi
+            # ignorer vides
+            [[ -z "$mod" ]] && continue
             
-            echo "$mod" >> "$disabled_list_file"
-
-            modprobe -r -q "$mod" 2>/dev/null || true
-            if ! grep -qxF "blacklist $mod" /etc/modprobe.d/blacklist.conf 2>/dev/null ; then
-                 echo "# WIFI-TOGGLE START" >> /etc/modprobe.d/blacklist.conf
-                 echo "blacklist $mod" >> /etc/modprobe.d/blacklist.conf
-                 echo "# WIFI-TOGGLE END" >> /etc/modprobe.d/blacklist.conf
-            fi
+            sed -i "/^\s*blacklist\s\+$mod\b/d" /etc/modprobe.d/*.conf 2>/dev/null || true
         done
+
+        # Décharge les modules 
+        for mod in "${unique_modules_to_disable[@]}"; do
+            [[ -z "$mod" ]] && continue
+            echo "$mod" >> "$disabled_list_file"
+            modprobe -r -q "$mod" 2>/dev/null || true
+        done
+
+        # Ajoute un seul bloc marqué contenant toutes les lignes blacklist pour un nettoyage facile plus tard
+        {
+            echo "# WIFI-TOGGLE START"
+            for mod in "${unique_modules_to_disable[@]}"; do
+                [[ -z "$mod" ]] && continue
+                echo "blacklist $mod"
+            done
+            echo "# WIFI-TOGGLE END"
+        } >> /etc/modprobe.d/blacklist.conf
+
+        # Dédupliquer les lignes accidentelles 
+        deduplicate_blacklist
     fi
-    deduplicate_blacklist
 }
 
 # --- Fonction pour configurer le port USB pour le mode OTG --( 
@@ -330,16 +344,29 @@ enable_wifi_core() {
     local module_actually_loaded=""
     local disabled_list_file="/etc/wifi_disabled_modules.list"
 
-    sed -i '/# WIFI-TOGGLE START/,/# WIFI-TOGGLE END/d' /etc/modprobe.d/blacklist.conf
-    for mod_to_unblacklist in "${PREFERRED_WIFI_MODULES[@]}"; do
-        sed -i "/^blacklist\s\+$mod_to_unblacklist\b/d" /etc/modprobe.d/blacklist.conf 2>/dev/null || true
-    done
+    # Supprime tout le bloc Wifi-Togggle
+    if grep -q "^# WIFI-TOGGLE START" /etc/modprobe.d/blacklist.conf 2>/dev/null; then
+        sed -i '/# WIFI-TOGGLE START/,/# WIFI-TOGGLE END/d' /etc/modprobe.d/blacklist.conf 2>/dev/null || true
+    fi
+    
+    if [[ -f "$disabled_list_file" ]]; then
+        while read -r mod; do
+            [[ -z "$mod" ]] && continue
+            sed -i "/^\s*blacklist\s\+$mod\b/d" /etc/modprobe.d/*.conf 2>/dev/null || true
+        done < "$disabled_list_file"
+    fi
 
+    # Supprimer les lignes blacklist pour les modules préférés
+    for mod_to_unblacklist in "${PREFERRED_WIFI_MODULES[@]}"; do
+        sed -i "/^\s*blacklist\s\+$mod_to_unblacklist\b/d" /etc/modprobe.d/*.conf 2>/dev/null || true
+    done
+    
     rfkill unblock wifi 2>/dev/null || true
     if command -v nmcli &>/dev/null; then
         nmcli radio wifi on 2>/dev/null || true
     fi
 
+    # Recharger les modules depuis le fichier de sauvegarde
     if [ -f "$disabled_list_file" ]; then
         while read -r mod; do
             [[ -n "$mod" ]] && modprobe "$mod" 2>/dev/null || true
@@ -347,6 +374,7 @@ enable_wifi_core() {
         rm -f "$disabled_list_file"
     fi
 
+    # Charger les modules préférés
     for preferred_mod in "${PREFERRED_WIFI_MODULES[@]}"; do
         if modprobe "$preferred_mod" 2>/dev/null; then
             module_loaded_successfully=true
@@ -650,7 +678,7 @@ MainMenu() {
         WIFI_STATUS=$(get_wifi_status)
         local CHOICE
         CHOICE=$(dialog --output-fd 1 \
-            --backtitle "Wi-Fi Management v3.4 - R36S - By Jason" \
+            --backtitle "Wi-Fi Management v3.5 - R36S - By Jason" \
             --title "Wi-Fi Manager" \
             --menu "\nCurrent Wi-Fi Status: $WIFI_STATUS" 16 50 7 \
             1 "Install Wi-Fi icons" \
