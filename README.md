@@ -1,5 +1,5 @@
 # wifi-toggle v3.6
-No restarting ES if a game is launched 
+No restarting ES if a game is launched - Thank's to Zorn Taov
 
 # wifi-toggle v3.5
 Fix support all wifi module
