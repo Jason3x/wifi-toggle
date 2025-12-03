@@ -2,8 +2,9 @@
 
 #-----------------------#
 # WiFi Toggle for R36S  #
-#          v3.5         #
+#          v3.6         #
 #        By Jason       #
+#   Mod: Game & Ports   #
 #-----------------------#
 
 # --- Vérification des privilèges root ---
@@ -52,7 +53,7 @@ pkill -9 -f gptokeyb || true
 pkill -9 -f osk.py || true
 
 printf "\033c" > "$CURR_TTY"
-printf "Starting Wifi Toggle v3.5\nPlease wait..." > "$CURR_TTY"
+printf "Starting Wifi Toggle v3.6\nPlease wait..." > "$CURR_TTY"
 sleep 1
 
 # --- Fonctions pour détecter les modules de noyau Wi-Fi actuellement chargés ---.
@@ -488,7 +489,11 @@ while true; do
             fi
         done
         if [ "$need_restart" = true ]; then
-            systemctl restart emulationstation
+            # MODIFICATION: Check if a game/emulator/port is running before restarting ES
+            # Checks for standard emulators AND PortMaster scripts/engines
+            if ! pgrep -f "retroarch|ppsspp|drastic|flycast|dolphin|scummvm|amiberry|dosbox|pico8|redream|yabasanshiro|lzdoom|openbor|alephone|gmloader|godot|love|/roms/ports" > /dev/null; then
+                systemctl restart emulationstation
+            fi
         fi
         prev_state="$current_state"
     fi
@@ -678,7 +683,7 @@ MainMenu() {
         WIFI_STATUS=$(get_wifi_status)
         local CHOICE
         CHOICE=$(dialog --output-fd 1 \
-            --backtitle "Wi-Fi Management v3.5 - R36S - By Jason" \
+            --backtitle "Wi-Fi Management v3.6 - R36S - By Jason" \
             --title "Wi-Fi Manager" \
             --menu "\nCurrent Wi-Fi Status: $WIFI_STATUS" 16 50 7 \
             1 "Install Wi-Fi icons" \
